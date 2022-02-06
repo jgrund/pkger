@@ -18,7 +18,7 @@ anyhow = "1"
 tar = "0.4"
 flate2 = "1"
 
-tracing = "0.1"
+log = "0.4"
 
 async-rwlock = "1"
 futures = "0.3"

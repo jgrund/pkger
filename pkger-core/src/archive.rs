@@ -7,11 +7,11 @@ use crate::{ErrContext, Result};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use log::trace;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
-use tracing::{info_span, trace};
 
 /// Unpacks a given tar archive to the path specified by `output_dir`
 pub fn unpack_tarball<T: io::Read, P: AsRef<Path>>(
@@ -19,14 +19,11 @@ pub fn unpack_tarball<T: io::Read, P: AsRef<Path>>(
     output_dir: P,
 ) -> Result<()> {
     let output_dir = output_dir.as_ref();
-    let span = info_span!("unpack-archive", output_dir = %output_dir.display());
-    let _enter = span.enter();
-
     for entry in archive.entries()? {
         let mut entry = entry?;
         if let tar::EntryType::Regular = entry.header().entry_type() {
             let path = entry.header().path()?.to_path_buf();
-            trace!(parent: &span, entry = %path.display(), "unpacking");
+            trace!("unpacking {}", path.display());
             let name = path.file_name().unwrap_or_default();
 
             entry.unpack(output_dir.join(name))?;
@@ -44,10 +41,8 @@ pub fn save_tar_gz<T: io::Read>(
     output_dir: &Path,
 ) -> Result<()> {
     let path = output_dir.join(name);
-    let span = info_span!("save-tar-gz", path = %path.display());
-    let _enter = span.enter();
+    trace!("creating a gzipped tarball in {}", path.display());
 
-    trace!(parent: &span, "creating a gzipped tarball");
     let f = File::create(path.as_path())?;
     let mut e = GzEncoder::new(f, Compression::default());
     let mut archive = archive.into_inner();
@@ -68,16 +63,17 @@ where
     E: Iterator<Item = (P, &'archive [u8])>,
     P: AsRef<Path>,
 {
-    let span = info_span!("create-TAR-archive");
-    let _enter = span.enter();
-
     let archive_buf = Vec::new();
     let mut archive = tar::Builder::new(archive_buf);
 
     for entry in entries {
         let path = entry.0.as_ref();
         let size = entry.1.len() as u64;
-        trace!(entry = %path.display(), size = %size, "adding to archive");
+        trace!(
+            "adding to archive, path: {}, size: {}",
+            path.display(),
+            size
+        );
         let mut header = tar::Header::new_gnu();
         header.set_size(size);
         header.set_cksum();
@@ -86,5 +82,5 @@ where
 
     archive.finish()?;
 
-    archive.into_inner().context("failed to create tar archive")
+    archive.into_inner().context("creating tar archive")
 }

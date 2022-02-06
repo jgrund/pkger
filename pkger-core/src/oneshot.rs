@@ -3,7 +3,6 @@ use crate::docker::{api::ContainerCreateOpts, Docker};
 use crate::Result;
 
 use std::time::SystemTime;
-use tracing::{info_span, Instrument};
 
 #[derive(Debug)]
 /// Simple job that spawns a container with a command to execute and returns its stdout and/or
@@ -17,15 +16,10 @@ pub struct OneShotCtx<'job> {
 }
 
 pub async fn run(ctx: &OneShotCtx<'_>) -> Result<Output<u8>> {
-    let span = info_span!("oneshot-ctx", id = %ctx.id);
-    async move {
-        let mut container = DockerContainer::new(ctx.docker);
-        container.spawn(ctx.opts).await?;
+    let mut container = DockerContainer::new(ctx.docker);
+    container.spawn(ctx.opts).await?;
 
-        container.logs(ctx.stdout, ctx.stderr).await
-    }
-    .instrument(span)
-    .await
+    container.logs(ctx.stdout, ctx.stderr).await
 }
 
 impl<'job> OneShotCtx<'job> {

@@ -3,19 +3,15 @@ use crate::oneshot::{self, OneShotCtx};
 use crate::recipe::Os;
 use crate::{err, ErrContext, Error, Result};
 
-use tracing::{info_span, trace, Instrument};
+use log::trace;
 
 /// Finds out the operating system and version of the image with id `image_id`
 pub async fn find(image_id: &str, docker: &Docker) -> Result<Os> {
-    let span = info_span!("find-os");
     macro_rules! return_if_ok {
         ($check:expr) => {
-            match $check
-                .instrument(span.clone())
-                .await
-            {
+            match $check.await {
                 Ok(os) => return Ok(os),
-                Err(e) => trace!(reason = %e),
+                Err(e) => trace!("failed to determine distribution, reason: {:?}", e),
             }
         };
     }
@@ -38,10 +34,10 @@ async fn from_osrelease(image_id: &str, docker: &Docker) -> Result<Os> {
     ))
     .await?;
 
-    trace!(stderr = %String::from_utf8_lossy(&out.stderr));
+    trace!("stderr: {}", String::from_utf8_lossy(&out.stderr));
 
     let out = String::from_utf8_lossy(&out.stdout);
-    trace!(stdout = %out);
+    trace!("stdout: {}", out);
 
     fn extract_key(out: &str, key: &str) -> Option<String> {
         let key = [key, "="].join("");
@@ -88,10 +84,10 @@ async fn os_from(image_id: &str, docker: &Docker, file: &str) -> Result<Os> {
     ))
     .await?;
 
-    trace!(stderr = %String::from_utf8_lossy(&out.stderr));
+    trace!("stderr: {}", String::from_utf8_lossy(&out.stderr));
 
     let out = String::from_utf8_lossy(&out.stdout);
-    trace!(stdout = %out);
+    trace!("stdout: {}", out);
 
     let os_version = extract_version(&out);
 

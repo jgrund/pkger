@@ -1,13 +1,11 @@
 use crate::opts::GenRecipeOpts;
 use pkger_core::recipe::{DebRep, MetadataRep, PkgRep, RecipeRep, RpmRep};
 
+use log::{trace, warn};
 use serde_yaml::{Mapping, Value as YamlValue};
-use tracing::{info_span, trace, warn};
 
 pub fn recipe(opts: Box<GenRecipeOpts>) -> RecipeRep {
-    let span = info_span!("gen-recipe");
-    let _enter = span.enter();
-    trace!(opts = ?opts);
+    trace!("{:?}", opts);
 
     let git = if let Some(url) = opts.git_url {
         let mut git_src = Mapping::new();
@@ -27,13 +25,18 @@ pub fn recipe(opts: Box<GenRecipeOpts>) -> RecipeRep {
             if let Some(k) = kv_split.next() {
                 if let Some(v) = kv_split.next() {
                     if let Some(entry) = env.insert(YamlValue::from(k), YamlValue::from(v)) {
-                        warn!(key = k, old = ?entry.as_str(), new = v, "key already exists, overwriting")
+                        warn!(
+                            "key '{}' already exists, overwriting '{}' with '{}'",
+                            k,
+                            entry.as_str().unwrap_or_default(),
+                            v
+                        );
                     }
                 } else {
-                    warn!(entry = ?kv, "env entry missing a `=`");
+                    warn!("env entry '{}' missing a `=`", kv);
                 }
             } else {
-                warn!(entry = kv, "env entry missing a key or `=`");
+                warn!("env entry '{}' missing a key or `=`", kv);
             }
         }
     }

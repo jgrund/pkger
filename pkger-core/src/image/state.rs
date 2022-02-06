@@ -10,8 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, info_span, trace, Instrument};
 
 pub static DEFAULT_STATE_FILE: &str = ".pkger.state";
 
@@ -58,42 +58,32 @@ impl ImageState {
                 .unwrap_or_default()
                 .as_secs()
         );
-        let span = info_span!("create-image-state", image = %name);
-        async move {
-            let os = if let Some(os) = target.image_os() {
-                os.clone()
-            } else {
-                find(id, docker).await?
-            };
-            debug!(os = ?os, "parsed image info");
+        let os = if let Some(os) = target.image_os() {
+            os.clone()
+        } else {
+            find(id, docker).await?
+        };
+        debug!("found os for image '{}', os: {:#?}", name, os);
 
-            let image_handle = docker.images().get(id);
-            let details = image_handle.inspect().await?;
+        let image_handle = docker.images().get(id);
+        let details = image_handle.inspect().await?;
 
-            Ok(ImageState {
-                id: id.to_string(),
-                image: target.image().to_string(),
-                os,
-                tag: tag.to_string(),
-                timestamp: *timestamp,
-                details,
-                deps: deps.iter().map(|s| s.to_string()).collect(),
-                simple,
-            })
-        }
-        .instrument(span)
-        .await
+        Ok(ImageState {
+            id: id.to_string(),
+            image: target.image().to_string(),
+            os,
+            tag: tag.to_string(),
+            timestamp: *timestamp,
+            details,
+            deps: deps.iter().map(|s| s.to_string()).collect(),
+            simple,
+        })
     }
 
     /// Verifies if a given image exists in docker, on connection error returns false
     pub async fn exists(&self, docker: &Docker) -> bool {
-        let span = info_span!("check-image-exists", image = %self.image, id = %self.id);
-        async move {
-            info!("checking if image exists in Docker");
-            docker.images().get(&self.id).inspect().await.is_ok()
-        }
-        .instrument(span)
-        .await
+        info!("checking if image exists in Docker");
+        docker.images().get(&self.id).inspect().await.is_ok()
     }
 }
 

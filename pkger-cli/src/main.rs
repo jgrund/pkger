@@ -1,31 +1,29 @@
 #[macro_use]
 extern crate pkger_core;
 
-use std::fs;
-use std::process;
-
-use tracing::error;
-
-use app::Application;
-use config::Configuration;
-use opts::Opts;
-use pkger_core::{ErrContext, Error, Result};
-
 mod app;
 mod completions;
 mod config;
-mod fmt;
 mod gen;
 mod job;
 mod metadata;
 mod opts;
 mod table;
 
+use app::Application;
+use config::Configuration;
+use opts::Opts;
+use pkger_core::{ErrContext, Error, Result};
+
+use std::fs;
+use std::process;
+
 static DEFAULT_CONFIG_FILE: &str = ".pkger.yml";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Opts::from_args();
+    pretty_env_logger::init();
 
     if let opts::Command::Init(opts) = opts.command {
         let config_dir = dirs::config_dir().context("missing config directory")?;
@@ -54,7 +52,6 @@ async fn main() -> Result<()> {
             recipes_dir,
             output_dir,
             images_dir: Some(images_dir),
-            filter: opts.filter,
             docker: opts.docker,
             gpg_key: opts.gpg_key,
             gpg_name: opts.gpg_name,
@@ -104,18 +101,16 @@ async fn main() -> Result<()> {
     }
     let config = result.unwrap();
 
-    fmt::setup_tracing(&opts, &config);
-
     let mut app = match Application::new(config) {
         Ok(app) => app,
         Err(error) => {
-            error!(reason = %format!("{:?}", error), "failed to initialize pkger");
+            eprintln!("failed to initialize pkger, reason: {:?}", error);
             process::exit(1);
         }
     };
 
     if let Err(error) = app.process_opts(opts).await {
-        error!(reason = %format!("{:?}", error), "execution failed");
+        eprintln!("execution failed, reason: {:?}", error);
         process::exit(1);
     }
     Ok(())

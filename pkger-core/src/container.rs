@@ -10,9 +10,9 @@ use docker_api::{
     Container, Docker, Exec,
 };
 use futures::{StreamExt, TryStreamExt};
+use log::{error, info, trace};
 use std::path::Path;
 use std::str;
-use tracing::{error, info, info_span, trace, Instrument};
 
 /// Length of significant characters of a container ID.
 static CONTAINER_ID_LEN: usize = 12;
@@ -121,7 +121,7 @@ impl<'opts> ExecOpts<'opts> {
     pub fn build(self) -> ExecContainerOpts {
         let mut builder = ExecContainerOpts::builder();
 
-        trace!(exec = ?self);
+        trace!("{:#?}", &self);
 
         builder = builder
             .cmd(vec![self.shell, "-c", self.cmd])
@@ -169,41 +169,31 @@ impl<'job> DockerContainer<'job> {
     }
 
     pub async fn spawn(&mut self, opts: &ContainerCreateOpts) -> Result<()> {
-        let span = info_span!("container-spawn");
-        async move {
-            let container = self.docker.containers().create(opts).await?.id().to_owned();
+        let container = self.docker.containers().create(opts).await?.id().to_owned();
 
-            self.container = self.docker.containers().get(container);
-            info!(id = %self.id(), "created container");
+        self.container = self.docker.containers().get(container);
+        info!("created container, id: {}", self.id());
 
-            self.container.start().await?;
-            info!(id = %self.id(), "started container");
+        self.container.start().await?;
+        info!("started container, id: {}", self.id());
 
-            Ok(())
-        }
-        .instrument(span)
-        .await
+        Ok(())
     }
 
     pub async fn remove(&self) -> Result<()> {
-        let span = info_span!("container-remove");
-        async move {
-            info!(id = %self.id(), "stopping container");
-            self.container
-                .kill(None)
-                .await
-                .context("failed to stop container")?;
+        info!("stopping container, id: {}", self.id());
+        self.container
+            .kill(None)
+            .await
+            .context("failed to stop container")?;
 
-            info!(id = %self.id(), "deleting container");
-            self.container
-                .remove(&RmContainerOpts::builder().force(true).build())
-                .await
-                .context("failed to delete container")?;
+        info!("deleting container, id: {}", self.id());
+        self.container
+            .remove(&RmContainerOpts::builder().force(true).build())
+            .await
+            .context("failed to delete container")?;
 
-            Ok(())
-        }
-        .instrument(span)
-        .await
+        Ok(())
     }
 
     pub async fn exec<'cmd>(
@@ -211,97 +201,75 @@ impl<'job> DockerContainer<'job> {
         opts: &ExecContainerOpts,
         quiet: bool,
     ) -> Result<Output<String>> {
-        let span = info_span!("container-exec", id = %self.id());
-        async move {
-            let exec = Exec::create(self.docker, self.id(), opts).await?;
-            let mut stream = exec.start();
+        let exec = Exec::create(self.docker, self.id(), opts).await?;
+        let mut stream = exec.start();
 
-            let mut output = Output::default();
+        let mut output = Output::default();
 
-            while let Some(result) = stream.next().await {
-                match result? {
-                    TtyChunk::StdOut(chunk) => {
-                        let chunk = str::from_utf8(&chunk)?;
-                        output.stdout.push(chunk.to_string());
-                        if !quiet {
-                            chunk.lines().for_each(|line| {
-                                info!("{}", line.trim());
-                            })
-                        }
+        while let Some(result) = stream.next().await {
+            match result? {
+                TtyChunk::StdOut(chunk) => {
+                    let chunk = str::from_utf8(&chunk)?;
+                    output.stdout.push(chunk.to_string());
+                    if !quiet {
+                        chunk.lines().for_each(|line| {
+                            info!("{}", line.trim());
+                        })
                     }
-                    TtyChunk::StdErr(chunk) => {
-                        let chunk = str::from_utf8(&chunk)?;
-                        output.stderr.push(chunk.to_string());
-                        if !quiet {
-                            chunk.lines().for_each(|line| {
-                                error!("{}", line.trim());
-                            })
-                        }
-                    }
-                    _ => unreachable!(),
                 }
+                TtyChunk::StdErr(chunk) => {
+                    let chunk = str::from_utf8(&chunk)?;
+                    output.stderr.push(chunk.to_string());
+                    if !quiet {
+                        chunk.lines().for_each(|line| {
+                            error!("{}", line.trim());
+                        })
+                    }
+                }
+                _ => unreachable!(),
             }
-
-            output.exit_code = exec
-                .inspect()
-                .await
-                .map(|details| details.exit_code.unwrap_or_default())?;
-
-            Ok(output)
         }
-        .instrument(span)
-        .await
+
+        output.exit_code = exec
+            .inspect()
+            .await
+            .map(|details| details.exit_code.unwrap_or_default())?;
+
+        Ok(output)
     }
 
     pub async fn logs(&self, stdout: bool, stderr: bool) -> Result<Output<u8>> {
-        let span = info_span!("container-logs", id = %self.id());
-        async move {
-            trace!(stdout = %stdout, stderr = %stderr);
+        trace!("stdout: {}, stderr: {}", stdout, stderr);
 
-            let mut logs_stream = self
-                .container
-                .logs(&LogsOpts::builder().stdout(stdout).stderr(stderr).build());
+        let mut logs_stream = self
+            .container
+            .logs(&LogsOpts::builder().stdout(stdout).stderr(stderr).build());
 
-            info!("collecting output");
-            let mut output = Output::default();
-            while let Some(chunk) = logs_stream.next().await {
-                output.stdout.append(&mut chunk?.to_vec());
-            }
-
-            Ok(output)
+        info!("collecting output");
+        let mut output = Output::default();
+        while let Some(chunk) = logs_stream.next().await {
+            output.stdout.append(&mut chunk?.to_vec());
         }
-        .instrument(span)
-        .await
+
+        Ok(output)
     }
 
     pub async fn copy_from(&self, path: &Path) -> Result<Vec<u8>> {
-        let span = info_span!("copy-from", path = %path.display());
-        async move {
-            trace!("copying");
-            self.inner()
-                .copy_from(path)
-                .try_concat()
-                .await
-                .context("failed to copy from container")
-        }
-        .instrument(span)
-        .await
+        trace!("copying from '{}'", path.display());
+        self.inner()
+            .copy_from(path)
+            .try_concat()
+            .await
+            .context("copying from container")
     }
 
     pub async fn download_files(&self, source: &Path, dest: &Path) -> Result<()> {
-        let span = info_span!("container-download-files", id = %self.id(), source = %source.display(), destination = %dest.display());
-        let cloned_span = span.clone();
+        trace!("fetching '{}' to '{}'", source.display(), dest.display());
+        let files = self.copy_from(source).await?;
 
-        async move {
-            trace!("fetching");
-            let files = self.copy_from(source).await?;
+        let mut archive = tar::Archive::new(&files[..]);
 
-            let mut archive = tar::Archive::new(&files[..]);
-
-            cloned_span.in_scope(|| unpack_tarball(&mut archive, dest))
-        }
-        .instrument(span)
-        .await
+        unpack_tarball(&mut archive, dest)
     }
 
     pub async fn upload_files<'files, F, E, P>(
@@ -315,34 +283,26 @@ impl<'job> DockerContainer<'job> {
         E: AsRef<Path>,
         P: AsRef<Path>,
     {
-        let span = info_span!("upload-files");
-        let cloned_span = span.clone();
-        async move {
-            let destination = destination.as_ref();
-            let tar = cloned_span
-                .in_scope(|| create_tarball(files.into_iter()))
-                .context("failed creating a tarball with files")?;
-            let tar_path = destination.join("archive.tgz");
+        let destination = destination.as_ref();
+        let tar = create_tarball(files.into_iter()).context("creating a tarball with files")?;
+        let tar_path = destination.join("archive.tgz");
 
-            self.inner()
-                .copy_file_into(&tar_path, &tar)
-                .await
-                .context("failed to copy archive with files to container")?;
-
-            trace!("extract archive with files");
-            self.exec(
-                &ExecOpts::default()
-                    .cmd(&format!("tar -xf {}", tar_path.display()))
-                    .working_dir(destination)
-                    .build(),
-                quiet,
-            )
+        self.inner()
+            .copy_file_into(&tar_path, &tar)
             .await
-            .map(|_| ())
-            .context("failed to extract archive with with files")
-        }
-        .instrument(span)
+            .context("copying archive with files to container")?;
+
+        trace!("extract archive with files");
+        self.exec(
+            &ExecOpts::default()
+                .cmd(&format!("tar -xf {}", tar_path.display()))
+                .working_dir(destination)
+                .build(),
+            quiet,
+        )
         .await
+        .map(|_| ())
+        .context("extracting archive with with files")
     }
 }
 

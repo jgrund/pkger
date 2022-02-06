@@ -16,6 +16,7 @@ use pkger_core::{ErrContext, Error, Result};
 use async_rwlock::RwLock;
 use chrono::{offset::TimeZone, SecondsFormat, Utc};
 use colored::Color;
+use log::{error, warn};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,7 +26,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time;
 use tempdir::TempDir;
-use tracing::{error, info, info_span, trace, warn};
 use uuid::Uuid;
 
 // ################################################################################
@@ -35,7 +35,7 @@ fn set_ctrlc_handler(is_running: Arc<AtomicBool>) {
         warn!("got ctrl-c");
         is_running.store(false, Ordering::SeqCst);
     }) {
-        error!(reason = %e, "failed to set ctrl-c handler");
+        error!("failed to set ctrl-c handler, reason: {}", e);
     };
 }
 
@@ -141,14 +141,13 @@ impl Application {
             match ImagesState::load(&state_path).context("failed to load images state") {
                 Ok(state) => state,
                 Err(e) => {
-                    let e = format!("{:?}", e);
-                    warn!(msg = %e);
+                    warn!("{:?}", e);
                     ImagesState::new(&state_path)
                 }
             },
         ));
 
-        trace!(?images_state);
+        //trace!(?images_state);
 
         let app = Application {
             config: Arc::new(config),
@@ -287,16 +286,16 @@ impl Application {
     fn copy(&self, object: CopyObject) -> Result<()> {
         fn copy_dir(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
             let dst = dst.as_ref();
-            fs::create_dir_all(&dst).context("creating destination directory failed")?;
-            for entry in fs::read_dir(src).context("reading source directory failed")? {
+            fs::create_dir_all(&dst).context("creating destination directory")?;
+            for entry in fs::read_dir(src).context("reading source directory")? {
                 match entry {
                     Ok(entry) => {
                         if let Err(e) = handle_entry(dst, entry) {
-                            error!("failed to copy entry entry: {:?}", e);
+                            eprintln!("failed to copy entry\n{:?}", e);
                         }
                     }
                     Err(e) => {
-                        error!("invalid entry: {:?}", e);
+                        eprintln!("invalid entry\n{:?}", e);
                     }
                 }
             }
@@ -314,9 +313,8 @@ impl Application {
                     .map(|_| ())
             }
         }
-        let span = info_span!("copy");
 
-        span.in_scope(|| match object {
+        match object {
             CopyObject::Image { source, dest } => {
                 if let Some(images_dir) = &self.config.images_dir {
                     let base_path = images_dir.join(&source);
@@ -327,10 +325,10 @@ impl Application {
                     if dest_path.exists() {
                         return err!("image `{}` already exists", dest);
                     }
-                    info!("{} ~> {}", base_path.display(), dest_path.display());
+                    println!("{} ~> {}", base_path.display(), dest_path.display());
                     copy_dir(base_path, dest_path)
                         .context("failed to copy source image directory")?;
-                    info!("done.");
+                    println!("done.");
                     Ok(())
                 } else {
                     err!("no custom images directory defined in configuration")
@@ -345,26 +343,21 @@ impl Application {
                 if dest_path.exists() {
                     return err!("recipe `{}` already exists", dest);
                 }
-                info!("{} ~> {}", base_path.display(), dest_path.display());
+                println!("{} ~> {}", base_path.display(), dest_path.display());
                 copy_dir(base_path, dest_path).context("failed to copy source recipe directory")?;
-                info!("done.");
+                println!("done.");
                 Ok(())
             }
-        })
+        }
     }
 
     async fn clean_cache(&mut self) -> Result<()> {
-        let span = info_span!("clean-cache");
-        let _entered = span.enter();
-
         let mut state = self.images_state.write().await;
 
-        span.in_scope(|| {
-            state.clear();
-            state.save()
-        })?;
+        state.clear();
+        state.save()?;
 
-        info!("ok");
+        println!("cache cleaned.");
         Ok(())
     }
 
@@ -397,7 +390,7 @@ impl Application {
                         recipe.metadata.license.cell().left().color(Color::White),
                         recipe.metadata.description.cell().left(),
                     ]),
-                    Err(e) => warn!(recipe = %name, reason = %format!("{:?}", e)),
+                    Err(e) => warn!("recipe '{}' failed, reason: {}", name, e),
                 }
             }
             let table = table.into_table().with_headers(vec![
@@ -423,7 +416,7 @@ impl Application {
         let images = fs::read_dir(&self.config.output_dir)?.filter_map(|e| match e {
             Ok(e) => Some(e.path()),
             Err(e) => {
-                warn!(reason = %format!("{:?}", e), "invalid entry");
+                warn!("invalid entry, reason: {:?}", e);
                 None
             }
         });
@@ -505,13 +498,19 @@ impl Application {
                                 }
                             }
                             Err(e) => {
-                                error!(reason = %format!("{:?}", e), image = %image_name, "failed to list a package");
+                                eprintln!(
+                                    "failed to list a package for image '{}', reason: {:?}",
+                                    image_name, e
+                                );
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    error!(reason = %format!("{:?}", e), image = %image_name, "failed to list packages");
+                    eprintln!(
+                        "failed to list packages for image '{}', reason: {:?}",
+                        image_name, e
+                    );
                 }
             }
         }
@@ -575,7 +574,7 @@ impl Application {
                             images.push(out);
                         }
                         Err(e) => {
-                            warn!(reason = %format!("{:?}", e), "invalid entry");
+                            warn!("invalid entry, reason: {:?}", e);
                         }
                     }
                 });
@@ -599,14 +598,11 @@ impl Application {
         }
     }
 
-    async fn save_images_state(&self) {
-        let span = info_span!("save-images-state");
-        let _enter = span.enter();
-
-        let state = self.images_state.read().await;
-
-        if let Err(e) = state.save() {
-            error!(reason = %format!("{:?}", e), "failed to save image state");
-        }
+    async fn save_images_state(&self) -> Result<()> {
+        self.images_state
+            .read()
+            .await
+            .save()
+            .context("saving images state")
     }
 }
